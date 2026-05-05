@@ -1477,6 +1477,8 @@ static unsigned int msvg__parseColor(const char* str)
 	len = strlen(str);
 	if (len >= 1 && *str == '#')
 		return msvg__parseColorHex(str);
+	else if (len >= 12 && strcmp(str, "currentColor") == 0)
+		return MSVG_RGB(255, 255, 255);
 	else if (len >= 4 && str[0] == 'r' && str[1] == 'g' && str[2] == 'b' && str[3] == '(')
 		return msvg__parseColorRGB(str);
 	return msvg__parseColorName(str);
