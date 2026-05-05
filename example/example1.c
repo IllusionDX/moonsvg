@@ -21,10 +21,10 @@
 #include <float.h>
 #include <GLFW/glfw3.h>
 
-#define NANOSVG_IMPLEMENTATION
-#include "nanosvg.h"
+#define MOONSVG_IMPLEMENTATION
+#include "moonsvg.h"
 
-NSVGimage* g_image = NULL;
+MSVGimage* g_image = NULL;
 
 static unsigned char bgColor[4] = {205,202,200,255};
 static unsigned char lineColor[4] = {0,160,192,255};
@@ -142,8 +142,8 @@ void drawframe(GLFWwindow* window)
 {
 	int width = 0, height = 0;
 	float view[4], cx, cy, hw, hh, aspect, px;
-	NSVGshape* shape;
-	NSVGpath* path;
+	MSVGshape* shape;
+	MSVGpath* path;
 
 	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 	glfwGetFramebufferSize(window, &width, &height);
@@ -210,8 +210,8 @@ void drawframe(GLFWwindow* window)
 void resizecb(GLFWwindow* window, int width, int height)
 {
 	// Update and render
-	NSVG_NOTUSED(width);
-	NSVG_NOTUSED(height);
+	MSVG_NOTUSED(width);
+	MSVG_NOTUSED(height);
 	drawframe(window);
 }
 
@@ -224,7 +224,7 @@ int main()
 		return -1;
 
 	mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-    window = glfwCreateWindow(mode->width - 40, mode->height - 80, "Nano SVG", NULL, NULL);
+    window = glfwCreateWindow(mode->width - 40, mode->height - 80, "Moon SVG", NULL, NULL);
 	if (!window)
 	{
 		printf("Could not open window\n");
@@ -238,7 +238,7 @@ int main()
 	glEnable(GL_LINE_SMOOTH);
 
 
-	g_image = nsvgParseFromFile("../example/nano.svg", "px", 96.0f);
+	g_image = msvgParseFromFile("../example/nano.svg", "px", 96.0f);
 	if (g_image == NULL) {
 		printf("Could not open SVG image.\n");
 		glfwTerminate();
@@ -251,7 +251,7 @@ int main()
 		glfwPollEvents();
 	}
 
-	nsvgDelete(g_image);
+	msvgDelete(g_image);
 
 	glfwTerminate();
 	return 0;

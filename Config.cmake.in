@@ -1,5 +1,5 @@
 @PACKAGE_INIT@
 
-if (EXISTS ${CMAKE_CURRENT_LIST_DIR}/NanoSVGTargets.cmake)
-    include("${CMAKE_CURRENT_LIST_DIR}/NanoSVGTargets.cmake")
+if (EXISTS ${CMAKE_CURRENT_LIST_DIR}/MoonSVGTargets.cmake)
+    include("${CMAKE_CURRENT_LIST_DIR}/MoonSVGTargets.cmake")
 endif ()

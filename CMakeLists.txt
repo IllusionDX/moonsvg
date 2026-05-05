@@ -1,26 +1,26 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(NanoSVG C)
+project(MoonSVG C)
 
 # CMake needs *.c files to do something useful
-configure_file(src/nanosvg.h ${CMAKE_CURRENT_BINARY_DIR}/nanosvg.c)
-configure_file(src/nanosvgrast.h ${CMAKE_CURRENT_BINARY_DIR}/nanosvgrast.c)
+configure_file(src/moonsvg.h ${CMAKE_CURRENT_BINARY_DIR}/moonsvg.c)
+configure_file(src/moonsvgrast.h ${CMAKE_CURRENT_BINARY_DIR}/moonsvgrast.c)
 
-add_library(nanosvg ${CMAKE_CURRENT_BINARY_DIR}/nanosvg.c)
+add_library(moonsvg ${CMAKE_CURRENT_BINARY_DIR}/moonsvg.c)
 
 find_library(MATH_LIBRARY m) # Business as usual
 if(MATH_LIBRARY)
-    target_link_libraries(nanosvg PUBLIC ${MATH_LIBRARY})
+    target_link_libraries(moonsvg PUBLIC ${MATH_LIBRARY})
 endif()
 
-target_include_directories(nanosvg PUBLIC $<INSTALL_INTERFACE:include/nanosvg>)
-target_compile_definitions(nanosvg PRIVATE NANOSVG_IMPLEMENTATION)
+target_include_directories(moonsvg PUBLIC $<INSTALL_INTERFACE:include/moonsvg>)
+target_compile_definitions(moonsvg PRIVATE MOONSVG_IMPLEMENTATION)
 
-# Same for nanosvgrast
-add_library(nanosvgrast ${CMAKE_CURRENT_BINARY_DIR}/nanosvgrast.c)
-target_link_libraries(nanosvgrast PUBLIC nanosvg)
-target_include_directories(nanosvgrast PRIVATE src)
-target_compile_definitions(nanosvgrast PRIVATE NANOSVGRAST_IMPLEMENTATION)
+# Same for moonsvgrast
+add_library(moonsvgrast ${CMAKE_CURRENT_BINARY_DIR}/moonsvgrast.c)
+target_link_libraries(moonsvgrast PUBLIC moonsvg)
+target_include_directories(moonsvgrast PRIVATE src)
+target_compile_definitions(moonsvgrast PRIVATE MOONSVGRAST_IMPLEMENTATION)
 
 # Installation and export:
 
@@ -32,7 +32,7 @@ write_basic_package_version_file(
     COMPATIBILITY AnyNewerVersion
 )
 
-install(TARGETS nanosvg nanosvgrast
+install(TARGETS moonsvg moonsvgrast
         EXPORT ${PROJECT_NAME}Targets
 )
 
@@ -51,10 +51,10 @@ configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
 
 install(
     FILES
-      src/nanosvg.h
-      src/nanosvgrast.h
+      src/moonsvg.h
+      src/moonsvgrast.h
     DESTINATION
-      include/nanosvg
+      include/moonsvg
   )
 
 install(EXPORT ${PROJECT_NAME}Targets
