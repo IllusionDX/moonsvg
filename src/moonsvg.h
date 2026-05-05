@@ -181,6 +181,13 @@ typedef struct MSVGsymbol
 	struct MSVGsymbol* next;	// Next symbol in registry
 } MSVGsymbol;
 
+typedef struct MSVGstyle
+{
+	char name[64];				// Class name (without the dot)
+	char* properties;			// Pointer to property string inside original buffer
+	struct MSVGstyle* next;		// Next style in registry
+} MSVGstyle;
+
 typedef struct MSVGimage
 {
 	float width;				// Width of the image.
@@ -479,6 +486,8 @@ typedef struct MSVGparser
 	MSVGsymbol* symbols;		// Symbol registry for <defs>/<symbol>
 	MSVGsymbol* curSymbol;		// Currently open symbol during parsing
 	MSVGshape* symbolTail;		// Tail of shapes in current symbol
+	MSVGstyle* styles;			// CSS class style registry
+	int styleFlag;				// Inside <style> block
 	float viewMinx, viewMiny, viewWidth, viewHeight;
 	int alignX, alignY, alignType;
 	float dpi;
@@ -2108,11 +2117,114 @@ static void msvg__parseStyle(MSVGparser* p, const char* str)
 	}
 }
 
+static MSVGstyle* msvg__findStyle(MSVGparser* p, const char* name)
+{
+	MSVGstyle* st;
+	for (st = p->styles; st != NULL; st = st->next) {
+		if (strcmp(st->name, name) == 0)
+			return st;
+	}
+	return NULL;
+}
+
+static void msvg__parseCSSStyles(MSVGparser* p, char* str)
+{
+	char* s = str;
+	while (*s) {
+		// Skip whitespace and comments
+		while (*s && msvg__isspace(*s)) s++;
+		if (!*s) break;
+
+		// Look for class selector: .name
+		if (*s != '.') {
+			// Skip until next '.' or end
+			while (*s && *s != '.') s++;
+			continue;
+		}
+		s++; // skip '.'
+
+		// Extract class name
+		char* nameStart = s;
+		while (*s && !msvg__isspace(*s) && *s != '{' && *s != '.') s++;
+		int nameLen = (int)(s - nameStart);
+		if (nameLen <= 0 || nameLen >= 64) {
+			while (*s && *s != '{' && *s != '.') s++;
+			continue;
+		}
+
+		// Skip whitespace before {
+		while (*s && msvg__isspace(*s)) s++;
+		if (*s != '{') continue;
+		s++; // skip '{'
+
+		// Find closing }
+		char* propsStart = s;
+		int depth = 1;
+		while (*s && depth > 0) {
+			if (*s == '{') depth++;
+			else if (*s == '}') depth--;
+			if (depth > 0) s++;
+		}
+		if (depth != 0) break; // unbalanced braces
+
+		// s now points to '}', terminate properties string
+		*s = '\0';
+		s++; // move past '}'
+
+		// Allocate and fill style entry from pool
+		MSVGstyle* st = (MSVGstyle*)msvg__parserAlloc(p->image, sizeof(MSVGstyle));
+		if (st == NULL) continue;
+		memset(st, 0, sizeof(MSVGstyle));
+		memcpy(st->name, nameStart, nameLen);
+		st->name[nameLen] = '\0';
+		st->properties = propsStart;
+		st->next = p->styles;
+		p->styles = st;
+	}
+}
+
+static void msvg__applyClassStyles(MSVGparser* p, const char* classNames)
+{
+	char buf[256];
+	int i, n;
+	const char* s = classNames;
+
+	while (*s) {
+		// Skip leading whitespace
+		while (*s && msvg__isspace(*s)) s++;
+		if (!*s) break;
+
+		// Extract one class name
+		n = 0;
+		while (*s && !msvg__isspace(*s) && n < 255) {
+			buf[n++] = *s++;
+		}
+		buf[n] = '\0';
+
+		if (n > 0) {
+			MSVGstyle* st = msvg__findStyle(p, buf);
+			if (st && st->properties) {
+				msvg__parseStyle(p, st->properties);
+			}
+		}
+	}
+}
+
 static void msvg__parseAttribs(MSVGparser* p, const char** attr)
 {
 	int i;
-	for (i = 0; attr[i]; i += 2)
-	{
+
+	// Pass 1: Apply class styles first (so inline can override)
+	for (i = 0; attr[i]; i += 2) {
+		if (strcmp(attr[i], "class") == 0) {
+			msvg__applyClassStyles(p, attr[i + 1]);
+		}
+	}
+
+	// Pass 2: Process all attributes except class (inline overrides)
+	for (i = 0; attr[i]; i += 2) {
+		if (strcmp(attr[i], "class") == 0)
+			continue;
 		if (strcmp(attr[i], "style") == 0)
 			msvg__parseStyle(p, attr[i + 1]);
 		else
@@ -2484,20 +2596,15 @@ static void msvg__parsePath(MSVGparser* p, const char** attr)
 	int rargs = 0;
 	char initPoint;
 	float cpx, cpy, cpx2, cpy2;
-	const char* tmp[4];
 	char closedFlag;
 	int i;
 	char item[64];
 
+	msvg__parseAttribs(p, attr);
+
 	for (i = 0; attr[i]; i += 2) {
 		if (strcmp(attr[i], "d") == 0) {
 			s = attr[i + 1];
-		} else {
-			tmp[0] = attr[i];
-			tmp[1] = attr[i + 1];
-			tmp[2] = 0;
-			tmp[3] = 0;
-			msvg__parseAttribs(p, tmp);
 		}
 	}
 
@@ -2633,15 +2740,15 @@ static void msvg__parseRect(MSVGparser* p, const char** attr)
 	float ry = -1.0f;
 	int i;
 
+	msvg__parseAttribs(p, attr);
+
 	for (i = 0; attr[i]; i += 2) {
-		if (!msvg__parseAttr(p, attr[i], attr[i + 1])) {
-			if (strcmp(attr[i], "x") == 0) x = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigX(p), msvg__actualWidth(p));
-			if (strcmp(attr[i], "y") == 0) y = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigY(p), msvg__actualHeight(p));
-			if (strcmp(attr[i], "width") == 0) w = msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualWidth(p));
-			if (strcmp(attr[i], "height") == 0) h = msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualHeight(p));
-			if (strcmp(attr[i], "rx") == 0) rx = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualWidth(p)));
-			if (strcmp(attr[i], "ry") == 0) ry = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualHeight(p)));
-		}
+		if (strcmp(attr[i], "x") == 0) x = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigX(p), msvg__actualWidth(p));
+		else if (strcmp(attr[i], "y") == 0) y = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigY(p), msvg__actualHeight(p));
+		else if (strcmp(attr[i], "width") == 0) w = msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualWidth(p));
+		else if (strcmp(attr[i], "height") == 0) h = msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualHeight(p));
+		else if (strcmp(attr[i], "rx") == 0) rx = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualWidth(p)));
+		else if (strcmp(attr[i], "ry") == 0) ry = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualHeight(p)));
 	}
 
 	if (rx < 0.0f && ry > 0.0f) rx = ry;
@@ -2685,12 +2792,12 @@ static void msvg__parseCircle(MSVGparser* p, const char** attr)
 	float r = 0.0f;
 	int i;
 
+	msvg__parseAttribs(p, attr);
+
 	for (i = 0; attr[i]; i += 2) {
-		if (!msvg__parseAttr(p, attr[i], attr[i + 1])) {
-			if (strcmp(attr[i], "cx") == 0) cx = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigX(p), msvg__actualWidth(p));
-			if (strcmp(attr[i], "cy") == 0) cy = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigY(p), msvg__actualHeight(p));
-			if (strcmp(attr[i], "r") == 0) r = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualLength(p)));
-		}
+		if (strcmp(attr[i], "cx") == 0) cx = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigX(p), msvg__actualWidth(p));
+		else if (strcmp(attr[i], "cy") == 0) cy = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigY(p), msvg__actualHeight(p));
+		else if (strcmp(attr[i], "r") == 0) r = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualLength(p)));
 	}
 
 	if (r > 0.0f) {
@@ -2716,13 +2823,13 @@ static void msvg__parseEllipse(MSVGparser* p, const char** attr)
 	float ry = 0.0f;
 	int i;
 
+	msvg__parseAttribs(p, attr);
+
 	for (i = 0; attr[i]; i += 2) {
-		if (!msvg__parseAttr(p, attr[i], attr[i + 1])) {
-			if (strcmp(attr[i], "cx") == 0) cx = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigX(p), msvg__actualWidth(p));
-			if (strcmp(attr[i], "cy") == 0) cy = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigY(p), msvg__actualHeight(p));
-			if (strcmp(attr[i], "rx") == 0) rx = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualWidth(p)));
-			if (strcmp(attr[i], "ry") == 0) ry = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualHeight(p)));
-		}
+		if (strcmp(attr[i], "cx") == 0) cx = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigX(p), msvg__actualWidth(p));
+		else if (strcmp(attr[i], "cy") == 0) cy = msvg__parseCoordinate(p, attr[i+1], msvg__actualOrigY(p), msvg__actualHeight(p));
+		else if (strcmp(attr[i], "rx") == 0) rx = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualWidth(p)));
+		else if (strcmp(attr[i], "ry") == 0) ry = fabsf(msvg__parseCoordinate(p, attr[i+1], 0.0f, msvg__actualHeight(p)));
 	}
 
 	if (rx > 0.0f && ry > 0.0f) {
@@ -2749,13 +2856,13 @@ static void msvg__parseLine(MSVGparser* p, const char** attr)
 	float y2 = 0.0;
 	int i;
 
+	msvg__parseAttribs(p, attr);
+
 	for (i = 0; attr[i]; i += 2) {
-		if (!msvg__parseAttr(p, attr[i], attr[i + 1])) {
-			if (strcmp(attr[i], "x1") == 0) x1 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigX(p), msvg__actualWidth(p));
-			if (strcmp(attr[i], "y1") == 0) y1 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigY(p), msvg__actualHeight(p));
-			if (strcmp(attr[i], "x2") == 0) x2 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigX(p), msvg__actualWidth(p));
-			if (strcmp(attr[i], "y2") == 0) y2 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigY(p), msvg__actualHeight(p));
-		}
+		if (strcmp(attr[i], "x1") == 0) x1 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigX(p), msvg__actualWidth(p));
+		else if (strcmp(attr[i], "y1") == 0) y1 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigY(p), msvg__actualHeight(p));
+		else if (strcmp(attr[i], "x2") == 0) x2 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigX(p), msvg__actualWidth(p));
+		else if (strcmp(attr[i], "y2") == 0) y2 = msvg__parseCoordinate(p, attr[i + 1], msvg__actualOrigY(p), msvg__actualHeight(p));
 	}
 
 	msvg__resetPath(p);
@@ -2776,24 +2883,24 @@ static void msvg__parsePoly(MSVGparser* p, const char** attr, int closeFlag)
 	int nargs, npts = 0;
 	char item[64];
 
+	msvg__parseAttribs(p, attr);
+
 	msvg__resetPath(p);
 
 	for (i = 0; attr[i]; i += 2) {
-		if (!msvg__parseAttr(p, attr[i], attr[i + 1])) {
-			if (strcmp(attr[i], "points") == 0) {
-				s = attr[i + 1];
-				nargs = 0;
-				while (*s) {
-					s = msvg__getNextPathItem(s, item);
-					args[nargs++] = (float)msvg__atof(item);
-					if (nargs >= 2) {
-						if (npts == 0)
-							msvg__moveTo(p, args[0], args[1]);
-						else
-							msvg__lineTo(p, args[0], args[1]);
-						nargs = 0;
-						npts++;
-					}
+		if (strcmp(attr[i], "points") == 0) {
+			s = attr[i + 1];
+			nargs = 0;
+			while (*s) {
+				s = msvg__getNextPathItem(s, item);
+				args[nargs++] = (float)msvg__atof(item);
+				if (nargs >= 2) {
+					if (npts == 0)
+						msvg__moveTo(p, args[0], args[1]);
+					else
+						msvg__lineTo(p, args[0], args[1]);
+					nargs = 0;
+					npts++;
 				}
 			}
 		}
@@ -2985,6 +3092,11 @@ static void msvg__startElement(void* ud, const char* el, const char** attr)
 {
 	MSVGparser* p = (MSVGparser*)ud;
 
+	if (strcmp(el, "style") == 0) {
+		p->styleFlag = 1;
+		return;
+	}
+
 	if (p->defsFlag) {
 		// Inside defs: allow gradients, and shapes inside a symbol
 		if (strcmp(el, "linearGradient") == 0) {
@@ -3109,6 +3221,8 @@ static void msvg__endElement(void* ud, const char* el)
 	} else if (strcmp(el, "symbol") == 0) {
 		p->curSymbol = NULL;
 		p->symbolTail = NULL;
+	} else if (strcmp(el, "style") == 0) {
+		p->styleFlag = 0;
 	} else if (strcmp(el, "defs") == 0) {
 		p->defsFlag = 0;
 	}
@@ -3116,9 +3230,10 @@ static void msvg__endElement(void* ud, const char* el)
 
 static void msvg__content(void* ud, const char* s)
 {
-	MSVG_NOTUSED(ud);
-	MSVG_NOTUSED(s);
-	// empty
+	MSVGparser* p = (MSVGparser*)ud;
+	if (p->styleFlag) {
+		msvg__parseCSSStyles(p, (char*)s);
+	}
 }
 
 static void msvg__imageBounds(MSVGparser* p, float* bounds)
