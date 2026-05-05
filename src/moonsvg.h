@@ -174,6 +174,13 @@ typedef struct MSVGshape
 	struct MSVGshape* next;		// Pointer to next shape, or NULL if last element.
 } MSVGshape;
 
+typedef struct MSVGsymbol
+{
+	char id[64];				// Symbol identifier
+	MSVGshape* shapes;			// Linked list of shapes inside the symbol
+	struct MSVGsymbol* next;	// Next symbol in registry
+} MSVGsymbol;
+
 typedef struct MSVGimage
 {
 	float width;				// Width of the image.
@@ -469,6 +476,9 @@ typedef struct MSVGparser
 	MSVGimage* image;
 	MSVGgradientData* gradients;
 	MSVGshape* shapesTail;
+	MSVGsymbol* symbols;		// Symbol registry for <defs>/<symbol>
+	MSVGsymbol* curSymbol;		// Currently open symbol during parsing
+	MSVGshape* symbolTail;		// Tail of shapes in current symbol
 	float viewMinx, viewMiny, viewWidth, viewHeight;
 	int alignX, alignY, alignType;
 	float dpi;
@@ -1074,7 +1084,105 @@ static void msvg__addShape(MSVGparser* p)
 	// Set flags
 	shape->flags = (attr->visible ? MSVG_FLAGS_VISIBLE : 0x00);
 
-	// Add to tail
+	// Add to tail (image shapes or current symbol)
+	if (p->curSymbol) {
+		if (p->curSymbol->shapes == NULL)
+			p->curSymbol->shapes = shape;
+		else
+			p->symbolTail->next = shape;
+		p->symbolTail = shape;
+	} else {
+		if (p->image->shapes == NULL)
+			p->image->shapes = shape;
+		else
+			p->shapesTail->next = shape;
+		p->shapesTail = shape;
+	}
+}
+
+static MSVGsymbol* msvg__findSymbol(MSVGparser* p, const char* id)
+{
+	MSVGsymbol* sym;
+	for (sym = p->symbols; sym != NULL; sym = sym->next) {
+		if (strcmp(sym->id, id) == 0)
+			return sym;
+	}
+	return NULL;
+}
+
+static void msvg__deepCopyShape(MSVGparser* p, MSVGshape* src, float tx, float ty)
+{
+	MSVGshape* shape;
+	MSVGpath* srcPath, * dstPath, * pathTail = NULL;
+	int i;
+
+	shape = (MSVGshape*)msvg__parserAlloc(p->image, sizeof(MSVGshape));
+	if (shape == NULL) return;
+	memset(shape, 0, sizeof(MSVGshape));
+
+	memcpy(shape->id, src->id, sizeof shape->id);
+	memcpy(shape->fillGradient, src->fillGradient, sizeof shape->fillGradient);
+	memcpy(shape->strokeGradient, src->strokeGradient, sizeof shape->strokeGradient);
+	memcpy(shape->xform, src->xform, sizeof shape->xform);
+	shape->strokeWidth = src->strokeWidth;
+	shape->strokeDashOffset = src->strokeDashOffset;
+	shape->strokeDashCount = src->strokeDashCount;
+	for (i = 0; i < src->strokeDashCount; i++)
+		shape->strokeDashArray[i] = src->strokeDashArray[i];
+	shape->strokeLineJoin = src->strokeLineJoin;
+	shape->strokeLineCap = src->strokeLineCap;
+	shape->miterLimit = src->miterLimit;
+	shape->fillRule = src->fillRule;
+	shape->opacity = src->opacity;
+	shape->paintOrder = src->paintOrder;
+	shape->fill = src->fill;
+	shape->stroke = src->stroke;
+	shape->flags = src->flags;
+
+	// Deep-copy paths with x/y translation
+	for (srcPath = src->paths; srcPath != NULL; srcPath = srcPath->next) {
+		dstPath = (MSVGpath*)msvg__parserAlloc(p->image, sizeof(MSVGpath));
+		if (dstPath == NULL) continue;
+		memset(dstPath, 0, sizeof(MSVGpath));
+
+		dstPath->npts = srcPath->npts;
+		dstPath->closed = srcPath->closed;
+		dstPath->pts = (float*)msvg__parserAlloc(p->image, srcPath->npts * 2 * sizeof(float));
+		if (dstPath->pts == NULL) continue;
+
+		for (i = 0; i < srcPath->npts; i++) {
+			dstPath->pts[i*2] = srcPath->pts[i*2] + tx;
+			dstPath->pts[i*2+1] = srcPath->pts[i*2+1] + ty;
+		}
+
+		// Recalculate bounds after translation
+		dstPath->bounds[0] = srcPath->bounds[0] + tx;
+		dstPath->bounds[1] = srcPath->bounds[1] + ty;
+		dstPath->bounds[2] = srcPath->bounds[2] + tx;
+		dstPath->bounds[3] = srcPath->bounds[3] + ty;
+
+		if (shape->paths == NULL)
+			shape->paths = dstPath;
+		else
+			pathTail->next = dstPath;
+		pathTail = dstPath;
+	}
+
+	// Calculate shape bounds from translated paths
+	if (shape->paths) {
+		shape->bounds[0] = shape->paths->bounds[0];
+		shape->bounds[1] = shape->paths->bounds[1];
+		shape->bounds[2] = shape->paths->bounds[2];
+		shape->bounds[3] = shape->paths->bounds[3];
+		for (dstPath = shape->paths->next; dstPath != NULL; dstPath = dstPath->next) {
+			shape->bounds[0] = msvg__minf(shape->bounds[0], dstPath->bounds[0]);
+			shape->bounds[1] = msvg__minf(shape->bounds[1], dstPath->bounds[1]);
+			shape->bounds[2] = msvg__maxf(shape->bounds[2], dstPath->bounds[2]);
+			shape->bounds[3] = msvg__maxf(shape->bounds[3], dstPath->bounds[3]);
+		}
+	}
+
+	// Add to image tail
 	if (p->image->shapes == NULL)
 		p->image->shapes = shape;
 	else
@@ -1193,6 +1301,34 @@ static double msvg__atof(const char* s)
 	return res * sign;
 }
 
+static void msvg__parseUse(MSVGparser* p, const char** attr)
+{
+	MSVGsymbol* sym = NULL;
+	const char* href = NULL;
+	float x = 0.0f, y = 0.0f;
+	int i;
+
+	for (i = 0; attr[i]; i += 2) {
+		if (strcmp(attr[i], "xlink:href") == 0 || strcmp(attr[i], "href") == 0) {
+			href = attr[i + 1];
+		} else if (strcmp(attr[i], "x") == 0) {
+			x = (float)msvg__atof(attr[i + 1]);
+		} else if (strcmp(attr[i], "y") == 0) {
+			y = (float)msvg__atof(attr[i + 1]);
+		}
+	}
+
+	if (href && href[0] == '#') {
+		sym = msvg__findSymbol(p, href + 1);
+	}
+
+	if (sym && sym->shapes) {
+		MSVGshape* src;
+		for (src = sym->shapes; src != NULL; src = src->next) {
+			msvg__deepCopyShape(p, src, x, y);
+		}
+	}
+}
 
 static const char* msvg__parseNumber(const char* s, char* it, const int size)
 {
@@ -2850,13 +2986,66 @@ static void msvg__startElement(void* ud, const char* el, const char** attr)
 	MSVGparser* p = (MSVGparser*)ud;
 
 	if (p->defsFlag) {
-		// Skip everything but gradients in defs
+		// Inside defs: allow gradients, and shapes inside a symbol
 		if (strcmp(el, "linearGradient") == 0) {
 			msvg__parseGradient(p, attr, MSVG_PAINT_LINEAR_GRADIENT);
 		} else if (strcmp(el, "radialGradient") == 0) {
 			msvg__parseGradient(p, attr, MSVG_PAINT_RADIAL_GRADIENT);
 		} else if (strcmp(el, "stop") == 0) {
 			msvg__parseGradientStop(p, attr);
+		} else if (strcmp(el, "symbol") == 0) {
+			// Start a new symbol entry
+			MSVGsymbol* sym = (MSVGsymbol*)msvg__parserAlloc(p->image, sizeof(MSVGsymbol));
+			if (sym) {
+				memset(sym, 0, sizeof(MSVGsymbol));
+				msvg__parseAttribs(p, attr);
+				MSVGattrib* curAttr = msvg__getAttr(p);
+				memcpy(sym->id, curAttr->id, sizeof sym->id);
+				sym->next = p->symbols;
+				p->symbols = sym;
+				p->curSymbol = sym;
+				p->symbolTail = NULL;
+			}
+		} else if (p->curSymbol && (
+			strcmp(el, "path") == 0 || strcmp(el, "rect") == 0 ||
+			strcmp(el, "circle") == 0 || strcmp(el, "ellipse") == 0 ||
+			strcmp(el, "line") == 0 || strcmp(el, "polyline") == 0 ||
+			strcmp(el, "polygon") == 0 || strcmp(el, "g") == 0)) {
+			// Parse shapes inside symbol (same as normal parsing)
+			if (strcmp(el, "g") == 0) {
+				msvg__pushAttr(p);
+				msvg__parseAttribs(p, attr);
+			} else if (strcmp(el, "path") == 0) {
+				if (!p->pathFlag) {
+					msvg__pushAttr(p);
+					msvg__parsePath(p, attr);
+					msvg__popAttr(p);
+				}
+			} else if (strcmp(el, "rect") == 0) {
+				msvg__pushAttr(p);
+				msvg__parseRect(p, attr);
+				msvg__popAttr(p);
+			} else if (strcmp(el, "circle") == 0) {
+				msvg__pushAttr(p);
+				msvg__parseCircle(p, attr);
+				msvg__popAttr(p);
+			} else if (strcmp(el, "ellipse") == 0) {
+				msvg__pushAttr(p);
+				msvg__parseEllipse(p, attr);
+				msvg__popAttr(p);
+			} else if (strcmp(el, "line") == 0) {
+				msvg__pushAttr(p);
+				msvg__parseLine(p, attr);
+				msvg__popAttr(p);
+			} else if (strcmp(el, "polyline") == 0) {
+				msvg__pushAttr(p);
+				msvg__parsePoly(p, attr, 0);
+				msvg__popAttr(p);
+			} else if (strcmp(el, "polygon") == 0) {
+				msvg__pushAttr(p);
+				msvg__parsePoly(p, attr, 1);
+				msvg__popAttr(p);
+			}
 		}
 		return;
 	}
@@ -2900,6 +3089,8 @@ static void msvg__startElement(void* ud, const char* el, const char** attr)
 		msvg__parseGradient(p, attr, MSVG_PAINT_RADIAL_GRADIENT);
 	} else if (strcmp(el, "stop") == 0) {
 		msvg__parseGradientStop(p, attr);
+	} else if (strcmp(el, "use") == 0) {
+		msvg__parseUse(p, attr);
 	} else if (strcmp(el, "defs") == 0) {
 		p->defsFlag = 1;
 	} else if (strcmp(el, "svg") == 0) {
@@ -2915,6 +3106,9 @@ static void msvg__endElement(void* ud, const char* el)
 		msvg__popAttr(p);
 	} else if (strcmp(el, "path") == 0) {
 		p->pathFlag = 0;
+	} else if (strcmp(el, "symbol") == 0) {
+		p->curSymbol = NULL;
+		p->symbolTail = NULL;
 	} else if (strcmp(el, "defs") == 0) {
 		p->defsFlag = 0;
 	}
