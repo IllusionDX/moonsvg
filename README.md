@@ -41,7 +41,7 @@ The intended usage for the rasterizer is to for example bake icons of different 
 ``` C
 // Load
 	struct MSVGimage* image;
-	image = msvgParseFromFile("test.svg", "px", 96);
+	image = msvgParseFromFile("test.svg", "px", 96, MSVG_RGB(255, 255, 255));
 printf("size: %f x %f\n", image->width, image->height);
 // Use...
 for (shape = image->shapes; shape != NULL; shape = shape->next) {

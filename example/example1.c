@@ -238,7 +238,7 @@ int main()
 	glEnable(GL_LINE_SMOOTH);
 
 
-	g_image = msvgParseFromFile("../example/nano.svg", "px", 96.0f);
+	g_image = msvgParseFromFile("../example/nano.svg", "px", 96.0f, MSVG_RGB(255, 255, 255));
 	if (g_image == NULL) {
 		printf("Could not open SVG image.\n");
 		glfwTerminate();

@@ -35,7 +35,7 @@ int main()
 	const char* filename = "../example/23.svg";
 
 	printf("parsing %s\n", filename);
-	image = msvgParseFromFile(filename, "px", 96.0f);
+	image = msvgParseFromFile(filename, "px", 96.0f, MSVG_RGB(255, 255, 255));
 	if (image == NULL) {
 		printf("Could not open SVG image.\n");
 		goto error;

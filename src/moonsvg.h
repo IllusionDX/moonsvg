@@ -56,7 +56,7 @@ extern "C" {
 /* Example Usage:
 	// Load SVG
 	MSVGimage* image;
-	image = msvgParseFromFile("test.svg", "px", 96);
+	image = msvgParseFromFile("test.svg", "px", 96, MSVG_RGB(255, 255, 255));
 	printf("size: %f x %f\n", image->width, image->height);
 	// Use...
 	for (MSVGshape *shape = image->shapes; shape != NULL; shape = shape->next) {
@@ -198,11 +198,11 @@ typedef struct MSVGimage
 } MSVGimage;
 
 // Parses SVG file from a file, returns SVG image as paths.
-MSVGimage* msvgParseFromFile(const char* filename, const char* units, float dpi);
+MSVGimage* msvgParseFromFile(const char* filename, const char* units, float dpi, unsigned int themeColor);
 
 // Parses SVG file from a null terminated string, returns SVG image as paths.
 // Important note: changes the string.
-MSVGimage* msvgParse(char* input, const char* units, float dpi);
+MSVGimage* msvgParse(char* input, const char* units, float dpi, unsigned int themeColor);
 
 // Duplicates a path.
 MSVGpath* msvgDuplicatePath(MSVGpath* p);
@@ -488,6 +488,7 @@ typedef struct MSVGparser
 	MSVGshape* symbolTail;		// Tail of shapes in current symbol
 	MSVGstyle* styles;			// CSS class style registry
 	int styleFlag;				// Inside <style> block
+	unsigned int themeColor;	// Dynamic currentColor value
 	float viewMinx, viewMiny, viewWidth, viewHeight;
 	int alignX, alignY, alignType;
 	float dpi;
@@ -1649,7 +1650,7 @@ static unsigned int msvg__parseColorName(const char* str)
 	return MSVG_RGB(128, 128, 128);
 }
 
-static unsigned int msvg__parseColor(const char* str)
+static unsigned int msvg__parseColor(MSVGparser* p, const char* str)
 {
 	size_t len = 0;
 	while(*str == ' ') ++str;
@@ -1657,7 +1658,7 @@ static unsigned int msvg__parseColor(const char* str)
 	if (len >= 1 && *str == '#')
 		return msvg__parseColorHex(str);
 	else if (len >= 12 && strcmp(str, "currentColor") == 0)
-		return MSVG_RGB(255, 255, 255);
+		return p->themeColor;
 	else if (len >= 4 && str[0] == 'r' && str[1] == 'g' && str[2] == 'b' && str[3] == '(')
 		return msvg__parseColorRGB(str);
 	return msvg__parseColorName(str);
@@ -2010,7 +2011,7 @@ static int msvg__parseAttr(MSVGparser* p, const char* name, const char* value)
 			msvg__parseUrl(attr->fillGradient, value);
 		} else {
 			attr->hasFill = 1;
-			attr->fillColor = msvg__parseColor(value);
+			attr->fillColor = msvg__parseColor(p, value);
 		}
 	} else if (strcmp(name, "opacity") == 0) {
 		attr->opacity *= msvg__parseOpacity(value);
@@ -2024,7 +2025,7 @@ static int msvg__parseAttr(MSVGparser* p, const char* name, const char* value)
 			msvg__parseUrl(attr->strokeGradient, value);
 		} else {
 			attr->hasStroke = 1;
-			attr->strokeColor = msvg__parseColor(value);
+			attr->strokeColor = msvg__parseColor(p, value);
 		}
 	} else if (strcmp(name, "stroke-width") == 0) {
 		attr->strokeWidth = msvg__parseCoordinate(p, value, 0.0f, msvg__actualLength(p));
@@ -2048,7 +2049,7 @@ static int msvg__parseAttr(MSVGparser* p, const char* name, const char* value)
 		msvg__parseTransform(xform, value);
 		msvg__xformPremultiply(attr->xform, xform);
 	} else if (strcmp(name, "stop-color") == 0) {
-		attr->stopColor = msvg__parseColor(value);
+		attr->stopColor = msvg__parseColor(p, value);
 	} else if (strcmp(name, "stop-opacity") == 0) {
 		attr->stopOpacity = msvg__parseOpacity(value);
 	} else if (strcmp(name, "offset") == 0) {
@@ -3397,7 +3398,7 @@ static void msvg__createGradients(MSVGparser* p)
 	}
 }
 
-MSVGimage* msvgParse(char* input, const char* units, float dpi)
+MSVGimage* msvgParse(char* input, const char* units, float dpi, unsigned int themeColor)
 {
 	MSVGparser* p;
 	MSVGimage* ret = 0;
@@ -3407,6 +3408,7 @@ MSVGimage* msvgParse(char* input, const char* units, float dpi)
 		return NULL;
 	}
 	p->dpi = dpi;
+	p->themeColor = themeColor;
 
 	msvg__parseXML(input, msvg__startElement, msvg__endElement, msvg__content, p);
 
@@ -3424,7 +3426,7 @@ MSVGimage* msvgParse(char* input, const char* units, float dpi)
 	return ret;
 }
 
-MSVGimage* msvgParseFromFile(const char* filename, const char* units, float dpi)
+MSVGimage* msvgParseFromFile(const char* filename, const char* units, float dpi, unsigned int themeColor)
 {
 	FILE* fp = NULL;
 	size_t size;
@@ -3441,7 +3443,7 @@ MSVGimage* msvgParseFromFile(const char* filename, const char* units, float dpi)
 	if (fread(data, 1, size, fp) != size) goto error;
 	data[size] = '\0';	// Must be null terminated.
 	fclose(fp);
-	image = msvgParse(data, units, dpi);
+	image = msvgParse(data, units, dpi, themeColor);
 	free(data);
 
 	return image;
