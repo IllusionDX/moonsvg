@@ -2013,9 +2013,9 @@ static int msvg__parseAttr(MSVGparser* p, const char* name, const char* value)
 			attr->fillColor = msvg__parseColor(value);
 		}
 	} else if (strcmp(name, "opacity") == 0) {
-		attr->opacity = msvg__parseOpacity(value);
+		attr->opacity *= msvg__parseOpacity(value);
 	} else if (strcmp(name, "fill-opacity") == 0) {
-		attr->fillOpacity = msvg__parseOpacity(value);
+		attr->fillOpacity *= msvg__parseOpacity(value);
 	} else if (strcmp(name, "stroke") == 0) {
 		if (strcmp(value, "none") == 0) {
 			attr->hasStroke = 0;
@@ -2033,7 +2033,7 @@ static int msvg__parseAttr(MSVGparser* p, const char* name, const char* value)
 	} else if (strcmp(name, "stroke-dashoffset") == 0) {
 		attr->strokeDashOffset = msvg__parseCoordinate(p, value, 0.0f, msvg__actualLength(p));
 	} else if (strcmp(name, "stroke-opacity") == 0) {
-		attr->strokeOpacity = msvg__parseOpacity(value);
+		attr->strokeOpacity *= msvg__parseOpacity(value);
 	} else if (strcmp(name, "stroke-linecap") == 0) {
 		attr->strokeLineCap = msvg__parseLineCap(value);
 	} else if (strcmp(name, "stroke-linejoin") == 0) {
