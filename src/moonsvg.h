@@ -144,8 +144,9 @@ typedef struct MSVGpath
 
 #define MSVG__PARSER_MEMPAGE_SIZE 8192
 typedef struct MSVGparserPage {
-    unsigned char mem[MSVG__PARSER_MEMPAGE_SIZE];
+    unsigned char* mem;
     int size;
+    int capacity;
     struct MSVGparserPage* next;
 } MSVGparserPage;
 
@@ -423,6 +424,7 @@ typedef struct MSVGgradientData
 	char units;
 	float xform[6];
 	int nstops;
+	int stopCapacity;
 	MSVGgradientStop* stops;
 	struct MSVGgradientData* next;
 } MSVGgradientData;
@@ -635,7 +637,7 @@ static unsigned char msvg__encodePaintOrder(enum MSVGpaintOrder a, enum MSVGpain
     return (a & 0x03) | ((b & 0x03) << 2) | ((c & 0x03) << 4);
 }
 
-static MSVGparserPage* msvg__nextParserPage(MSVGimage* img, MSVGparserPage* cur)
+static MSVGparserPage* msvg__nextParserPage(MSVGimage* img, MSVGparserPage* cur, int capacity)
 {
     MSVGparserPage* newp;
     if (cur != NULL && cur->next != NULL)
@@ -643,6 +645,12 @@ static MSVGparserPage* msvg__nextParserPage(MSVGimage* img, MSVGparserPage* cur)
     newp = (MSVGparserPage*)malloc(sizeof(MSVGparserPage));
     if (newp == NULL) return NULL;
     memset(newp, 0, sizeof(MSVGparserPage));
+    newp->mem = (unsigned char*)malloc(capacity);
+    if (newp->mem == NULL) {
+        free(newp);
+        return NULL;
+    }
+    newp->capacity = capacity;
     if (cur != NULL)
         cur->next = newp;
     else
@@ -654,8 +662,17 @@ static void* msvg__parserAlloc(MSVGimage* img, int size)
 {
     unsigned char* buf;
     size = (size + 7) & ~7;
+    if (size > MSVG__PARSER_MEMPAGE_SIZE) {
+        // Large allocation: create a dedicated page with exact capacity.
+        MSVGparserPage* largePage = msvg__nextParserPage(img, img->curpage, size);
+        if (largePage == NULL) return NULL;
+        largePage->size = size;
+        if (img->curpage != NULL && img->curpage->next == largePage)
+            img->curpage = largePage;
+        return largePage->mem;
+    }
     if (img->curpage == NULL || img->curpage->size + size > MSVG__PARSER_MEMPAGE_SIZE) {
-        img->curpage = msvg__nextParserPage(img, img->curpage);
+        img->curpage = msvg__nextParserPage(img, img->curpage, MSVG__PARSER_MEMPAGE_SIZE);
         if (img->curpage == NULL) return NULL;
     }
     buf = &img->curpage->mem[img->curpage->size];
@@ -719,8 +736,7 @@ static void msvg__deleteGradientData(MSVGgradientData* grad)
 	MSVGgradientData* next;
 	while (grad != NULL) {
 		next = grad->next;
-		free(grad->stops);
-		// grad itself is pool-allocated; no individual free needed.
+		// grad and grad->stops are pool-allocated; no individual free needed.
 		grad = next;
 	}
 }
@@ -2773,6 +2789,8 @@ static void msvg__parseGradient(MSVGparser* p, const char** attr, signed char ty
 		}
 	}
 
+	grad->stopCapacity = 8;
+	grad->stops = (MSVGgradientStop*)msvg__parserAlloc(p->image, sizeof(MSVGgradientStop) * grad->stopCapacity);
 	grad->next = p->gradients;
 	p->gradients = grad;
 }
@@ -2796,9 +2814,17 @@ static void msvg__parseGradientStop(MSVGparser* p, const char** attr)
 	grad = p->gradients;
 	if (grad == NULL) return;
 
+	if (grad->nstops >= grad->stopCapacity) {
+		// Grow stops array from pool.
+		int newCapacity = grad->stopCapacity * 2;
+		MSVGgradientStop* newStops = (MSVGgradientStop*)msvg__parserAlloc(p->image, sizeof(MSVGgradientStop) * newCapacity);
+		if (newStops == NULL) return;
+		for (i = 0; i < grad->nstops; i++)
+			newStops[i] = grad->stops[i];
+		grad->stops = newStops;
+		grad->stopCapacity = newCapacity;
+	}
 	grad->nstops++;
-	grad->stops = (MSVGgradientStop*)realloc(grad->stops, sizeof(MSVGgradientStop)*grad->nstops);
-	if (grad->stops == NULL) return;
 
 	// Insert
 	idx = grad->nstops-1;
@@ -3155,6 +3181,7 @@ void msvgDelete(MSVGimage* image)
 	page = image->pages;
 	while (page) {
 		MSVGparserPage* next = page->next;
+		if (page->mem) free(page->mem);
 		free(page);
 		page = next;
 	}
