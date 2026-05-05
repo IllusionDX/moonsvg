@@ -142,6 +142,13 @@ typedef struct MSVGpath
 	struct MSVGpath* next;		// Pointer to next path, or NULL if last element.
 } MSVGpath;
 
+#define MSVG__PARSER_MEMPAGE_SIZE 8192
+typedef struct MSVGparserPage {
+    unsigned char mem[MSVG__PARSER_MEMPAGE_SIZE];
+    int size;
+    struct MSVGparserPage* next;
+} MSVGparserPage;
+
 typedef struct MSVGshape
 {
 	char id[64];				// Optional 'id' attr of the shape or its group
@@ -171,6 +178,8 @@ typedef struct MSVGimage
 	float width;				// Width of the image.
 	float height;				// Height of the image.
 	MSVGshape* shapes;			// Linked list of shapes in the image.
+	MSVGparserPage* pages;		// Memory pool pages for parsed data.
+	MSVGparserPage* curpage;	// Current pool page in use.
 } MSVGimage;
 
 // Parses SVG file from a file, returns SVG image as paths.
@@ -626,6 +635,34 @@ static unsigned char msvg__encodePaintOrder(enum MSVGpaintOrder a, enum MSVGpain
     return (a & 0x03) | ((b & 0x03) << 2) | ((c & 0x03) << 4);
 }
 
+static MSVGparserPage* msvg__nextParserPage(MSVGimage* img, MSVGparserPage* cur)
+{
+    MSVGparserPage* newp;
+    if (cur != NULL && cur->next != NULL)
+        return cur->next;
+    newp = (MSVGparserPage*)malloc(sizeof(MSVGparserPage));
+    if (newp == NULL) return NULL;
+    memset(newp, 0, sizeof(MSVGparserPage));
+    if (cur != NULL)
+        cur->next = newp;
+    else
+        img->pages = newp;
+    return newp;
+}
+
+static void* msvg__parserAlloc(MSVGimage* img, int size)
+{
+    unsigned char* buf;
+    size = (size + 7) & ~7;
+    if (img->curpage == NULL || img->curpage->size + size > MSVG__PARSER_MEMPAGE_SIZE) {
+        img->curpage = msvg__nextParserPage(img, img->curpage);
+        if (img->curpage == NULL) return NULL;
+    }
+    buf = &img->curpage->mem[img->curpage->size];
+    img->curpage->size += size;
+    return buf;
+}
+
 static MSVGparser* msvg__createParser(void)
 {
 	MSVGparser* p;
@@ -667,19 +704,14 @@ error:
 
 static void msvg__deletePaths(MSVGpath* path)
 {
-	while (path) {
-		MSVGpath *next = path->next;
-		if (path->pts != NULL)
-			free(path->pts);
-		free(path);
-		path = next;
-	}
+    (void)path;
+    // Paths are now pool-allocated; no individual cleanup needed.
 }
 
 static void msvg__deletePaint(MSVGpaint* paint)
 {
-	if (paint->type == MSVG_PAINT_LINEAR_GRADIENT || paint->type == MSVG_PAINT_RADIAL_GRADIENT)
-		free(paint->gradient);
+	(void)paint;
+	// Gradient is now pool-allocated; no individual cleanup needed.
 }
 
 static void msvg__deleteGradientData(MSVGgradientData* grad)
@@ -688,7 +720,7 @@ static void msvg__deleteGradientData(MSVGgradientData* grad)
 	while (grad != NULL) {
 		next = grad->next;
 		free(grad->stops);
-		free(grad);
+		// grad itself is pool-allocated; no individual free needed.
 		grad = next;
 	}
 }
@@ -696,7 +728,6 @@ static void msvg__deleteGradientData(MSVGgradientData* grad)
 static void msvg__deleteParser(MSVGparser* p)
 {
 	if (p != NULL) {
-		msvg__deletePaths(p->plist);
 		msvg__deleteGradientData(p->gradients);
 		msvgDelete(p->image);
 		free(p->pts);
@@ -862,7 +893,7 @@ static MSVGgradient* msvg__createGradient(MSVGparser* p, const char* id, const f
 	}
 	if (stops == NULL) return NULL;
 
-	grad = (MSVGgradient*)malloc(sizeof(MSVGgradient) + sizeof(MSVGgradientStop)*(nstops-1));
+	grad = (MSVGgradient*)msvg__parserAlloc(p->image, sizeof(MSVGgradient) + sizeof(MSVGgradientStop)*(nstops-1));
 	if (grad == NULL) return NULL;
 
 	// The shape width and height.
@@ -966,8 +997,8 @@ static void msvg__addShape(MSVGparser* p)
 	if (p->plist == NULL)
 		return;
 
-	shape = (MSVGshape*)malloc(sizeof(MSVGshape));
-	if (shape == NULL) goto error;
+	shape = (MSVGshape*)msvg__parserAlloc(p->image, sizeof(MSVGshape));
+	if (shape == NULL) return;
 	memset(shape, 0, sizeof(MSVGshape));
 
 	memcpy(shape->id, attr->id, sizeof shape->id);
@@ -1033,11 +1064,6 @@ static void msvg__addShape(MSVGparser* p)
 	else
 		p->shapesTail->next = shape;
 	p->shapesTail = shape;
-
-	return;
-
-error:
-	if (shape) free(shape);
 }
 
 static void msvg__addPath(MSVGparser* p, char closed)
@@ -1058,12 +1084,12 @@ static void msvg__addPath(MSVGparser* p, char closed)
 	if ((p->npts % 3) != 1)
 		return;
 
-	path = (MSVGpath*)malloc(sizeof(MSVGpath));
-	if (path == NULL) goto error;
+	path = (MSVGpath*)msvg__parserAlloc(p->image, sizeof(MSVGpath));
+	if (path == NULL) return;
 	memset(path, 0, sizeof(MSVGpath));
 
-	path->pts = (float*)malloc(p->npts*2*sizeof(float));
-	if (path->pts == NULL) goto error;
+	path->pts = (float*)msvg__parserAlloc(p->image, p->npts * 2 * sizeof(float));
+	if (path->pts == NULL) return;
 	path->closed = closed;
 	path->npts = p->npts;
 
@@ -1090,14 +1116,6 @@ static void msvg__addPath(MSVGparser* p, char closed)
 
 	path->next = p->plist;
 	p->plist = path;
-
-	return;
-
-error:
-	if (path != NULL) {
-		if (path->pts != NULL) free(path->pts);
-		free(path);
-	}
 }
 
 // We roll our own string to float because the std library one uses locale and messes things up.
@@ -2692,7 +2710,7 @@ static void msvg__parseSVG(MSVGparser* p, const char** attr)
 static void msvg__parseGradient(MSVGparser* p, const char** attr, signed char type)
 {
 	int i;
-	MSVGgradientData* grad = (MSVGgradientData*)malloc(sizeof(MSVGgradientData));
+	MSVGgradientData* grad = (MSVGgradientData*)msvg__parserAlloc(p->image, sizeof(MSVGgradientData));
 	if (grad == NULL) return;
 	memset(grad, 0, sizeof(MSVGgradientData));
 	grad->units = MSVG_OBJECT_SPACE;
@@ -3132,16 +3150,13 @@ error:
 
 void msvgDelete(MSVGimage* image)
 {
-	MSVGshape *snext, *shape;
+	MSVGparserPage* page;
 	if (image == NULL) return;
-	shape = image->shapes;
-	while (shape != NULL) {
-		snext = shape->next;
-		msvg__deletePaths(shape->paths);
-		msvg__deletePaint(&shape->fill);
-		msvg__deletePaint(&shape->stroke);
-		free(shape);
-		shape = snext;
+	page = image->pages;
+	while (page) {
+		MSVGparserPage* next = page->next;
+		free(page);
+		page = next;
 	}
 	free(image);
 }
