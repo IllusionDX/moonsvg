@@ -2165,27 +2165,36 @@ static float msvg__vecang(float ux, float uy, float vx, float vy)
 	return ((ux*vy < uy*vx) ? -1.0f : 1.0f) * acosf(r);
 }
 
+static double msvg__vecang_d(double ux, double uy, double vx, double vy)
+{
+	double r = (ux * vx + uy * vy) / (sqrt(ux * ux + uy * uy) * sqrt(vx * vx + vy * vy));
+	if (r < -1.0) r = -1.0;
+	if (r > 1.0) r = 1.0;
+	return ((ux * vy < uy * vx) ? -1.0 : 1.0) * acos(r);
+}
+
 static void msvg__pathArcTo(MSVGparser* p, float* cpx, float* cpy, float* args, int rel)
 {
 	// Ported from canvg (https://code.google.com/p/canvg/)
-	float rx, ry, rotx;
-	float x1, y1, x2, y2, cx, cy, dx, dy, d;
-	float x1p, y1p, cxp, cyp, s, sa, sb;
-	float ux, uy, vx, vy, a1, da;
-	float x, y, tanx, tany, a, px = 0, py = 0, ptanx = 0, ptany = 0, t[6];
-	float sinrx, cosrx;
+	double rx, ry, rotx;
+	double x1, y1, x2, y2, cx, cy, dx, dy, d;
+	double x1p, y1p, cxp, cyp, s, sa, sb;
+	double ux, uy, vx, vy, a1, da;
+	double x, y, tanx, tany, a, px = 0.0, py = 0.0, ptanx = 0.0, ptany = 0.0, t[6];
+	double sinrx, cosrx;
 	int fa, fs;
 	int i, ndivs;
-	float hda, kappa;
+	double hda, kappa;
+	static const double pi_d = 3.14159265358979323846;
 
-	rx = fabsf(args[0]);				// y radius
-	ry = fabsf(args[1]);				// x radius
-	rotx = args[2] / 180.0f * MSVG_PI;		// x rotation angle
-	fa = fabsf(args[3]) > 1e-6 ? 1 : 0;	// Large arc
-	fs = fabsf(args[4]) > 1e-6 ? 1 : 0;	// Sweep direction
-	x1 = *cpx;							// start point
+	rx = fabs(args[0]);				// y radius
+	ry = fabs(args[1]);				// x radius
+	rotx = args[2] / 180.0 * pi_d;		// x rotation angle
+	fa = fabs(args[3]) > 1e-6 ? 1 : 0;	// Large arc
+	fs = fabs(args[4]) > 1e-6 ? 1 : 0;	// Sweep direction
+	x1 = *cpx;						// start point
 	y1 = *cpy;
-	if (rel) {							// end point
+	if (rel) {						// end point
 		x2 = *cpx + args[5];
 		y2 = *cpy + args[6];
 	} else {
@@ -2195,60 +2204,60 @@ static void msvg__pathArcTo(MSVGparser* p, float* cpx, float* cpy, float* args, 
 
 	dx = x1 - x2;
 	dy = y1 - y2;
-	d = sqrtf(dx*dx + dy*dy);
-	if (d < 1e-6f || rx < 1e-6f || ry < 1e-6f) {
+	d = sqrt(dx * dx + dy * dy);
+	if (d < 1e-6 || rx < 1e-6 || ry < 1e-6) {
 		// The arc degenerates to a line
-		msvg__lineTo(p, x2, y2);
-		*cpx = x2;
-		*cpy = y2;
+		msvg__lineTo(p, (float)x2, (float)y2);
+		*cpx = (float)x2;
+		*cpy = (float)y2;
 		return;
 	}
 
-	sinrx = sinf(rotx);
-	cosrx = cosf(rotx);
+	sinrx = sin(rotx);
+	cosrx = cos(rotx);
 
 	// Convert to center point parameterization.
 	// http://www.w3.org/TR/SVG11/implnote.html#ArcImplementationNotes
 	// 1) Compute x1', y1'
-	x1p = cosrx * dx / 2.0f + sinrx * dy / 2.0f;
-	y1p = -sinrx * dx / 2.0f + cosrx * dy / 2.0f;
-	d = msvg__sqr(x1p)/msvg__sqr(rx) + msvg__sqr(y1p)/msvg__sqr(ry);
+	x1p = cosrx * dx / 2.0 + sinrx * dy / 2.0;
+	y1p = -sinrx * dx / 2.0 + cosrx * dy / 2.0;
+	d = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
 	if (d > 1) {
-		d = sqrtf(d);
+		d = sqrt(d);
 		rx *= d;
 		ry *= d;
 	}
 	// 2) Compute cx', cy'
-	s = 0.0f;
-	sa = msvg__sqr(rx)*msvg__sqr(ry) - msvg__sqr(rx)*msvg__sqr(y1p) - msvg__sqr(ry)*msvg__sqr(x1p);
-	sb = msvg__sqr(rx)*msvg__sqr(y1p) + msvg__sqr(ry)*msvg__sqr(x1p);
-	if (sa < 0.0f) sa = 0.0f;
-	if (sb > 0.0f)
-		s = sqrtf(sa / sb);
+	s = 0.0;
+	sa = (rx * rx) * (ry * ry) - (rx * rx) * (y1p * y1p) - (ry * ry) * (x1p * x1p);
+	sb = (rx * rx) * (y1p * y1p) + (ry * ry) * (x1p * x1p);
+	if (sa < 0.0) sa = 0.0;
+	if (sb > 0.0)
+		s = sqrt(sa / sb);
 	if (fa == fs)
 		s = -s;
 	cxp = s * rx * y1p / ry;
 	cyp = s * -ry * x1p / rx;
 
 	// 3) Compute cx,cy from cx',cy'
-	cx = (x1 + x2)/2.0f + cosrx*cxp - sinrx*cyp;
-	cy = (y1 + y2)/2.0f + sinrx*cxp + cosrx*cyp;
+	cx = (x1 + x2) / 2.0 + cosrx * cxp - sinrx * cyp;
+	cy = (y1 + y2) / 2.0 + sinrx * cxp + cosrx * cyp;
 
 	// 4) Calculate theta1, and delta theta.
 	ux = (x1p - cxp) / rx;
 	uy = (y1p - cyp) / ry;
 	vx = (-x1p - cxp) / rx;
 	vy = (-y1p - cyp) / ry;
-	a1 = msvg__vecang(1.0f,0.0f, ux,uy);	// Initial angle
-	da = msvg__vecang(ux,uy, vx,vy);		// Delta angle
+	a1 = msvg__vecang_d(1.0, 0.0, ux, uy);	// Initial angle
+	da = msvg__vecang_d(ux, uy, vx, vy);		// Delta angle
 
-//	if (vecrat(ux,uy,vx,vy) <= -1.0f) da = MSVG_PI;
-//	if (vecrat(ux,uy,vx,vy) >= 1.0f) da = 0;
+//	if (vecrat(ux,uy,vx,vy) <= -1.0) da = pi_d;
+//	if (vecrat(ux,uy,vx,vy) >= 1.0) da = 0;
 
 	if (fs == 0 && da > 0)
-		da -= 2 * MSVG_PI;
+		da -= 2 * pi_d;
 	else if (fs == 1 && da < 0)
-		da += 2 * MSVG_PI;
+		da += 2 * pi_d;
 
 	// Approximate the arc using cubic spline segments.
 	t[0] = cosrx; t[1] = sinrx;
@@ -2257,33 +2266,41 @@ static void msvg__pathArcTo(MSVGparser* p, float* cpx, float* cpy, float* args, 
 
 	// Split arc into max 90 degree segments.
 	// The loop assumes an iteration per end point (including start and end), this +1.
-	ndivs = (int)(fabsf(da) / (MSVG_PI*0.5f) + 1.0f);
-	hda = (da / (float)ndivs) / 2.0f;
+	ndivs = (int)(fabs(da) / (pi_d * 0.5) + 1.0);
+	hda = (da / (double)ndivs) / 2.0;
 	// Fix for ticket #179: division by 0: avoid cotangens around 0 (infinite)
-	if ((hda < 1e-3f) && (hda > -1e-3f))
-		hda *= 0.5f;
+	if ((hda < 1e-3) && (hda > -1e-3))
+		hda *= 0.5;
 	else
-		hda = (1.0f - cosf(hda)) / sinf(hda);
-	kappa = fabsf(4.0f / 3.0f * hda);
-	if (da < 0.0f)
+		hda = (1.0 - cos(hda)) / sin(hda);
+	kappa = fabs(4.0 / 3.0 * hda);
+	if (da < 0.0)
 		kappa = -kappa;
 
 	for (i = 0; i <= ndivs; i++) {
-		a = a1 + da * ((float)i/(float)ndivs);
-		dx = cosf(a);
-		dy = sinf(a);
-		msvg__xformPoint(&x, &y, dx*rx, dy*ry, t); // position
-		msvg__xformVec(&tanx, &tany, -dy*rx * kappa, dx*ry * kappa, t); // tangent
+		a = a1 + da * ((double)i / (double)ndivs);
+		dx = cos(a);
+		dy = sin(a);
+
+		// Inline double-precision matrix transform (position: xformPoint equivalent)
+		double pxi = dx * rx * t[0] + dy * ry * t[2] + t[4];
+		double pyi = dx * rx * t[1] + dy * ry * t[3] + t[5];
+		// Inline double-precision matrix transform (tangent: xformVec equivalent)
+		double tanxi = (-dy * rx * kappa) * t[0] + (dx * ry * kappa) * t[2];
+		double tanyi = (-dy * rx * kappa) * t[1] + (dx * ry * kappa) * t[3];
+
 		if (i > 0)
-			msvg__cubicBezTo(p, px+ptanx,py+ptany, x-tanx, y-tany, x, y);
-		px = x;
-		py = y;
-		ptanx = tanx;
-		ptany = tany;
+			msvg__cubicBezTo(p, (float)(px + ptanx), (float)(py + ptany),
+			                    (float)(pxi - tanxi), (float)(pyi - tanyi),
+			                    (float)pxi, (float)pyi);
+		px = pxi;
+		py = pyi;
+		ptanx = tanxi;
+		ptany = tanyi;
 	}
 
-	*cpx = x2;
-	*cpy = y2;
+	*cpx = (float)x2;
+	*cpy = (float)y2;
 }
 
 static void msvg__parsePath(MSVGparser* p, const char** attr)
