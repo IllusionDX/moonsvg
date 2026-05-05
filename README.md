@@ -1,7 +1,10 @@
-*This project is not actively maintained.*
+MoonSVG
+=======
 
-Moon SVG
-==========
+> **Fork Notice:** This is a fork of [NanoSVG](https://github.com/memononen/nanosvg) by Mikko Mononen.  
+> The original library has been renamed to MoonSVG and its symbols have been prefixed with `msvg` / `MSVG` to avoid collisions when used alongside the upstream version.  
+> All original copyright notices and the zlib license have been preserved.
+
 
 ## Parser
 
